@@ -96,15 +96,22 @@ def sanitize_text_for_json(text: str) -> str:
 def safe_get_row_data(row):
     """Trích xuất dữ liệu từ hàng cơ sở dữ liệu một cách an toàn"""
     try:
+        # Debug: Print available keys in row
+        # if row:
+        #     print(f"🔍 DEBUG: Available keys in row: {list(row.keys())}")
+
         def get_attr(attr_name, default=None):
             try:
-                return getattr(row, attr_name, default)
-            except AttributeError:
+                # Use dictionary access for psycopg dict_row
+                value = row.get(attr_name, default) if row else default
+                print(f"🔍 DEBUG: {attr_name} = {value}")
+                return value
+            except (AttributeError, KeyError):
                 return default
         
         def get_bool_attr(attr_name, default=False):
             try:
-                value = getattr(row, attr_name, default)
+                value = row.get(attr_name, default) if row else default
                 if value is None:
                     return default
                 if isinstance(value, int):
@@ -112,7 +119,7 @@ def safe_get_row_data(row):
                 if isinstance(value, str):
                     return value.lower() in ('true', '1', 'yes', 'on')
                 return bool(value)
-            except AttributeError:
+            except (AttributeError, KeyError):
                 return default
         
         def format_date(date_field):
@@ -124,22 +131,23 @@ def safe_get_row_data(row):
             return None
         
         gym_data = {
-            "id": str(get_attr('Id', '')),
-            "gymName": get_attr('GymName', ''),
-            "since": format_date(get_attr('Since')),
-            "address": get_attr('Address', ''),
-            "representName": get_attr('RepresentName', ''),
-            "taxCode": get_attr('TaxCode', ''),
-            "longitude": get_attr('Longitude'),
-            "latitude": get_attr('Latitude'),
-            "qrCode": get_attr('QRCode', ''),
-            "hotResearch": get_bool_attr('HotResearch', False),
-            "accountId": str(get_attr('AccountId', '')) if get_attr('AccountId') else None,
-            "active": get_bool_attr('Active', True),
-            "createAt": format_date(get_attr('CreateAt')),
-            "updateAt": format_date(get_attr('UpdateAt')),
-            "deleteAt": format_date(get_attr('DeleteAt')),
-            "mainImage": get_attr('MainImage', '')
+            "id": str(get_attr('id', '')),
+            "gymName": get_attr('gymname', ''),
+            "fullName": get_attr('fullname', ''),
+            "address": get_attr('gymaddress', ''),
+            "taxCode": get_attr('taxcode', ''),
+            "longitude": get_attr('longitude'),
+            "latitude": get_attr('latitude'),
+            "hotResearch": get_bool_attr('hotresearch', False),
+            "accountStatus": get_attr('accountstatus', 'Active'),
+            "email": get_attr('email', ''),
+            "phoneNumber": get_attr('phonenumber', ''),
+            "gymDescription": get_attr('gymdescription', ''),
+            "avatarUrl": get_attr('avatarurl', ''),
+            "gymImages": get_attr('gymimages', []),
+            "createdAt": format_date(get_attr('createdat')),
+            "updatedAt": format_date(get_attr('updatedat')),
+            "dob": format_date(get_attr('dob'))
         }
         
         # Handle distance for nearby queries
@@ -150,6 +158,7 @@ def safe_get_row_data(row):
             except:
                 gym_data["distance_km"] = 0
         
+        print(f"🔍 DEBUG: Final gym_data = {gym_data}")
         return gym_data
         
     except Exception as e:
@@ -157,20 +166,21 @@ def safe_get_row_data(row):
         return {
             "id": "",
             "gymName": "Phòng gym không xác định",
-            "since": None,
+            "fullName": "",
             "address": "",
-            "representName": "",
             "taxCode": "",
             "longitude": None,
             "latitude": None,
-            "qrCode": "",
             "hotResearch": False,
-            "accountId": None,
-            "active": True,
-            "createAt": None,
-            "updateAt": None,
-            "deleteAt": None,
-            "mainImage": ""
+            "accountStatus": "Active",
+            "email": "",
+            "phoneNumber": "",
+            "gymDescription": "",
+            "avatarUrl": "",
+            "gymImages": [],
+            "createdAt": None,
+            "updatedAt": None,
+            "dob": None
         }
 
 # Khởi tạo ứng dụng FastAPI
@@ -215,23 +225,31 @@ def build_nearby_gym_query(longitude, latitude, max_distance_km= 10):
     return f"""
     WITH BoundedGyms AS (
         SELECT 
-            Id, GymName, Since, Address, RepresentName, TaxCode,
-            CAST(Longitude AS DOUBLE PRECISION) AS Longitude,
-            CAST(Latitude AS DOUBLE PRECISION) AS Latitude,
-            QRCode, HotResearch, AccountId, Active,
-            CreateAt, UpdateAt, DeleteAt, MainImage
-        FROM Gym 
-        WHERE Active = 1
-        AND CAST(Latitude AS DOUBLE PRECISION) BETWEEN {latitude - lat_range} AND {latitude + lat_range}
-        AND CAST(Longitude AS DOUBLE PRECISION) BETWEEN {longitude - lng_range} AND {longitude + lng_range}
+            "Id" as id, "GymName" as gymname, "FullName" as fullname,
+            "GymAddress" as gymaddress, "TaxCode" as taxcode,
+            CAST("Longitude" AS DOUBLE PRECISION) AS longitude,
+            CAST("Latitude" AS DOUBLE PRECISION) AS latitude,
+            "hotResearch" as hotresearch, "AccountStatus" as accountstatus,
+            "Email" as email, "PhoneNumber" as phonenumber,
+            "GymDescription" as gymdescription, "AvatarUrl" as avatarurl,
+            "GymImages" as gymimages, "CreatedAt" as createdat,
+            "UpdatedAt" as updatedat, "Dob" as dob
+        FROM "AspNetUsers" 
+        WHERE "AccountStatus" = 'Active'
+        AND "GymName" IS NOT NULL 
+        AND "GymName" != ''
+        AND "Latitude" IS NOT NULL 
+        AND "Longitude" IS NOT NULL
+        AND CAST("Latitude" AS DOUBLE PRECISION) BETWEEN {latitude - lat_range} AND {latitude + lat_range}
+        AND CAST("Longitude" AS DOUBLE PRECISION) BETWEEN {longitude - lng_range} AND {longitude + lng_range}
     ),
     DistanceCalculated AS (
         SELECT *,
             6371.0 * 2 * ASIN(
                 SQRT(
-                    POWER(SIN(RADIANS({latitude} - Latitude) / 2), 2) +
-                    COS(RADIANS({latitude})) * COS(RADIANS(Latitude)) *
-                    POWER(SIN(RADIANS({longitude} - Longitude) / 2), 2)
+                    POWER(SIN(RADIANS({latitude} - latitude) / 2), 2) +
+                    COS(RADIANS({latitude})) * COS(RADIANS(latitude)) *
+                    POWER(SIN(RADIANS({longitude} - longitude) / 2), 2)
                 )
             ) AS distance_km
         FROM BoundedGyms
@@ -239,7 +257,7 @@ def build_nearby_gym_query(longitude, latitude, max_distance_km= 10):
     SELECT * 
     FROM DistanceCalculated
     WHERE distance_km <= {max_distance_km}
-    ORDER BY distance_km ASC, HotResearch DESC, GymName ASC;
+    ORDER BY distance_km ASC, hotresearch DESC, gymname ASC;
     """
 
 def get_nearby_distance_preference(user_input):
@@ -530,12 +548,12 @@ def intelligent_gym_search(user_input):
                 search_info['location'] = match.group(0)
                 break
         
-        # 4. Xây dựng truy vấn SQL thông minh
-        base_conditions = ["Active = 1"]
-        
+        # 4. Xây dựng truy vấn SQL thông minh cho AspNetUsers table
+        base_conditions = ['"AccountStatus" = \'Active\'', '"GymName" IS NOT NULL', '"GymName" != \'\'']
+
         # Ưu tiên gym hot nếu có yêu cầu
         if search_info['hot_search']:
-            base_conditions.append("HotResearch = 1")
+            base_conditions.append('"hotResearch" = true')
             search_info['search_type'] = 'hot'
         
         # Xây dựng điều kiện tìm kiếm từ keywords
@@ -548,17 +566,17 @@ def intelligent_gym_search(user_input):
                 safe_keyword = keyword.replace("'", "''")
                 valid_keywords.append(safe_keyword)
                 search_conditions.extend([
-                    f"GymName LIKE '%{safe_keyword}%'",
-                    f"Address LIKE '%{safe_keyword}%'",
-                    f"RepresentName LIKE '%{safe_keyword}%'"
+                    f'"GymName" ILIKE \'%{safe_keyword}%\'',
+                    f'"GymAddress" ILIKE \'%{safe_keyword}%\'',
+                    f'"FullName" ILIKE \'%{safe_keyword}%\''
                 ])
         
         # Thêm điều kiện địa điểm nếu có
         if search_info['location']:
             safe_location = search_info['location'].replace("'", "''")
             search_conditions.extend([
-                f"Address LIKE '%{safe_location}%'",
-                f"GymName LIKE '%{safe_location}%'"
+                f'"GymAddress" ILIKE \'%{safe_location}%\'',
+                f'"GymName" ILIKE \'%{safe_location}%\''
             ])
         
         # Xây dựng mệnh đề WHERE
@@ -566,7 +584,7 @@ def intelligent_gym_search(user_input):
         
         if search_conditions:
             keyword_clause = " OR ".join(search_conditions)
-            where_clause += f" OR ({keyword_clause})"
+            where_clause += f" AND ({keyword_clause})"
         elif not search_info['hot_search']:
             # Nếu không có từ khóa và không phải tìm kiếm hot, return None
             return None
@@ -575,35 +593,51 @@ def intelligent_gym_search(user_input):
         if valid_keywords:
             primary_keyword = valid_keywords[0]
             sql_query = f"""
-            SELECT *, 
-                   CASE WHEN HotResearch = 1 THEN 20 ELSE 0 END as hot_score,
-                   CASE 
-                       WHEN GymName LIKE '%{primary_keyword}%' THEN 30
-                       WHEN Address LIKE '%{primary_keyword}%' THEN 25
-                       WHEN RepresentName LIKE '%{primary_keyword}%' THEN 15
-                       ELSE 5
-                   END as relevance_score,
-                   CASE 
-                       WHEN CreateAt >= DATEADD(year, -1, GETDATE()) THEN 5 
-                       ELSE 0 
-                   END as recency_score
-            FROM dbo.Gym 
+            SELECT 
+                "Id" as id, "GymName" as gymname, "FullName" as fullname,
+                "GymAddress" as gymaddress, "TaxCode" as taxcode,
+                "Longitude" as longitude, "Latitude" as latitude,
+                "hotResearch" as hotresearch, "AccountStatus" as accountstatus,
+                "Email" as email, "PhoneNumber" as phonenumber,
+                "GymDescription" as gymdescription, "AvatarUrl" as avatarurl,
+                "GymImages" as gymimages, "CreatedAt" as createdat,
+                "UpdatedAt" as updatedat, "Dob" as dob,
+                CASE WHEN "hotResearch" = true THEN 20 ELSE 0 END as hot_score,
+                CASE 
+                    WHEN "GymName" ILIKE '%{primary_keyword}%' THEN 30
+                    WHEN "GymAddress" ILIKE '%{primary_keyword}%' THEN 25
+                    WHEN "FullName" ILIKE '%{primary_keyword}%' THEN 15
+                    ELSE 5
+                END as relevance_score,
+                CASE 
+                    WHEN "CreatedAt" >= (CURRENT_DATE - INTERVAL '1 year') THEN 5 
+                    ELSE 0 
+                END as recency_score
+            FROM "AspNetUsers" 
             WHERE {where_clause}
-            ORDER BY hot_score DESC, relevance_score DESC, recency_score DESC, GymName ASC
+            ORDER BY hot_score DESC, relevance_score DESC, recency_score DESC, gymname ASC
             """
         else:
             # Query cho tìm kiếm general hoặc hot gym
             sql_query = f"""
-            SELECT *, 
-                   CASE WHEN HotResearch = 1 THEN 20 ELSE 0 END as hot_score,
-                   10 as relevance_score,
-                   CASE 
-                       WHEN CreateAt >= DATEADD(year, -1, GETDATE()) THEN 5 
-                       ELSE 0 
-                   END as recency_score
-            FROM dbo.Gym 
+            SELECT 
+                "Id" as id, "GymName" as gymname, "FullName" as fullname,
+                "GymAddress" as gymaddress, "TaxCode" as taxcode,
+                "Longitude" as longitude, "Latitude" as latitude,
+                "hotResearch" as hotresearch, "AccountStatus" as accountstatus,
+                "Email" as email, "PhoneNumber" as phonenumber,
+                "GymDescription" as gymdescription, "AvatarUrl" as avatarurl,
+                "GymImages" as gymimages, "CreatedAt" as createdat,
+                "UpdatedAt" as updatedat, "Dob" as dob,
+                CASE WHEN "hotResearch" = true THEN 20 ELSE 0 END as hot_score,
+                10 as relevance_score,
+                CASE 
+                    WHEN "CreatedAt" >= (CURRENT_DATE - INTERVAL '1 year') THEN 5 
+                    ELSE 0 
+                END as recency_score
+            FROM "AspNetUsers" 
             WHERE {where_clause}
-            ORDER BY hot_score DESC, relevance_score DESC, recency_score DESC, GymName ASC
+            ORDER BY hot_score DESC, relevance_score DESC, recency_score DESC, gymname ASC
             """
         
         print(f"🤖 INTELLIGENT SEARCH: Input='{user_input}' | Type={search_info['search_type']} | Keywords={search_info['keywords'][:3]}")
@@ -660,15 +694,25 @@ def classify_query(user_input):
         if any(case in user_input_lower for case in special_gym_cases):
             # Trường hợp muốn xem tất cả gym
             return True, """
-            SELECT *, 
-                   CASE WHEN HotResearch = 1 THEN 20 ELSE 0 END as hot_score,
-                   10 as relevance_score
-            FROM dbo.Gym 
-            WHERE Active = 1
-            ORDER BY hot_score DESC, GymName ASC
+            SELECT 
+                "Id" as id, "GymName" as gymname, "FullName" as fullname,
+                "GymAddress" as gymaddress, "TaxCode" as taxcode,
+                "Longitude" as longitude, "Latitude" as latitude,
+                "hotResearch" as hotresearch, "AccountStatus" as accountstatus,
+                "Email" as email, "PhoneNumber" as phonenumber,
+                "GymDescription" as gymdescription, "AvatarUrl" as avatarurl,
+                "GymImages" as gymimages, "CreatedAt" as createdat,
+                "UpdatedAt" as updatedat, "Dob" as dob,
+                CASE WHEN "hotResearch" = true THEN 20 ELSE 0 END as hot_score,
+                10 as relevance_score
+            FROM "AspNetUsers" 
+            WHERE "AccountStatus" = 'Active'
+            AND "GymName" IS NOT NULL 
+            AND "GymName" != ''
+            ORDER BY hot_score DESC, gymname ASC
             """
         
-        # 4. Nếu không khớp với trường hợp nào -> không cần query database
+        # 4. Nếu không khớp với trường hợp nào -> không cần truy vấn database
         print(f"❌ NO_DB_QUERY: '{user_input}' không cần truy vấn database")
         return False, None
         
