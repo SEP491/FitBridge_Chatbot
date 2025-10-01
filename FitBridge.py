@@ -580,7 +580,7 @@ def intelligent_gym_search(user_input):
                 valid_keywords.append(safe_keyword)
                 search_conditions.extend([
                     f'"GymName" ILIKE \'%{safe_keyword}%\'',
-                    f'"GymAddress" ILIKE \'%{safe_keyword}%\'',
+                    f'COALESCE(CONCAT_WS(\', \', NULLIF(a."HouseNumber", \'\'), NULLIF(a."Street", \'\'), NULLIF(a."Ward", \'\'), NULLIF(a."District", \'\'), NULLIF(a."City", \'\')), \'Địa chỉ chưa cập nhật\') ILIKE \'%{safe_keyword}%\'',
                     f'"FullName" ILIKE \'%{safe_keyword}%\''
                 ])
         
@@ -588,7 +588,7 @@ def intelligent_gym_search(user_input):
         if search_info['location']:
             safe_location = search_info['location'].replace("'", "''")
             search_conditions.extend([
-                f'"GymAddress" ILIKE \'%{safe_location}%\'',
+                f'COALESCE(CONCAT_WS(\', \', NULLIF(a."HouseNumber", \'\'), NULLIF(a."Street", \'\'), NULLIF(a."Ward", \'\'), NULLIF(a."District", \'\'), NULLIF(a."City", \'\')), \'Địa chỉ chưa cập nhật\') ILIKE \'%{safe_location}%\'',
                 f'"GymName" ILIKE \'%{safe_location}%\''
             ])
         
@@ -698,7 +698,7 @@ def detect_search_intent(user_input):
     intent_patterns = {
         'location_search': [r'(gần|near|nearby|xung quanh|lân cận|quanh đây)', r'(district \d+|quận \d+|huyện)'],
         'name_search': [r'(tìm .+ gym|gym .+|.+ fitness|.+ center)'],
-        'popular_search': [r'(hot|nổi tiếng|phổ biến|được yêu thích|tốt nhất|best)', r'(gym hot|phòng gym hot|fitness hot)'],
+        'popular_search': [r'(hot|nổi tiếng|phổ biến|được yêu thích|tốt nhất|best|top)', r'(gym hot|phòng gym hot|fitness hot)'],
         'new_search': [r'(mới|new|vừa mở|recently|gần đây)'],
         'old_search': [r'(cũ|old|lâu năm|uy tín|established)'],
         'price_search': [r'(rẻ|cheap|affordable|giá tốt|budget)'],
