@@ -96,15 +96,11 @@ def sanitize_text_for_json(text: str) -> str:
 def safe_get_row_data(row):
     """Trích xuất dữ liệu từ hàng cơ sở dữ liệu một cách an toàn"""
     try:
-        # Debug: Print available keys in row
-        # if row:
-        #     print(f"🔍 DEBUG: Available keys in row: {list(row.keys())}")
 
         def get_attr(attr_name, default=None):
             try:
                 # Use dictionary access for psycopg dict_row
                 value = row.get(attr_name, default) if row else default
-                print(f"🔍 DEBUG: {attr_name} = {value}")
                 return value
             except (AttributeError, KeyError):
                 return default
@@ -158,7 +154,6 @@ def safe_get_row_data(row):
             except:
                 gym_data["distance_km"] = 0
         
-        print(f"🔍 DEBUG: Final gym_data = {gym_data}")
         return gym_data
         
     except Exception as e:
