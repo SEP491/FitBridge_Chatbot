@@ -225,23 +225,41 @@ def build_nearby_gym_query(longitude, latitude, max_distance_km= 10):
     return f"""
     WITH BoundedGyms AS (
         SELECT 
-            "Id" as id, "GymName" as gymname, "FullName" as fullname,
-            "GymAddress" as gymaddress, "TaxCode" as taxcode,
-            CAST("Longitude" AS DOUBLE PRECISION) AS longitude,
-            CAST("Latitude" AS DOUBLE PRECISION) AS latitude,
-            "hotResearch" as hotresearch, "AccountStatus" as accountstatus,
-            "Email" as email, "PhoneNumber" as phonenumber,
-            "GymDescription" as gymdescription, "AvatarUrl" as avatarurl,
-            "GymImages" as gymimages, "CreatedAt" as createdat,
-            "UpdatedAt" as updatedat, "Dob" as dob
-        FROM "AspNetUsers" 
-        WHERE "AccountStatus" = 'Active'
-        AND "GymName" IS NOT NULL 
-        AND "GymName" != ''
-        AND "Latitude" IS NOT NULL 
-        AND "Longitude" IS NOT NULL
-        AND CAST("Latitude" AS DOUBLE PRECISION) BETWEEN {latitude - lat_range} AND {latitude + lat_range}
-        AND CAST("Longitude" AS DOUBLE PRECISION) BETWEEN {longitude - lng_range} AND {longitude + lng_range}
+            u."Id" as id, 
+            u."GymName" as gymname, 
+            u."FullName" as fullname,
+            COALESCE(
+                CONCAT_WS(', ', 
+                    NULLIF(a."HouseNumber", ''), 
+                    NULLIF(a."Street", ''), 
+                    NULLIF(a."Ward", ''), 
+                    NULLIF(a."District", ''), 
+                    NULLIF(a."City", '')
+                ), 
+                'Địa chỉ chưa cập nhật'
+            ) as gymaddress,
+            u."TaxCode" as taxcode,
+            CAST(u."Longitude" AS DOUBLE PRECISION) AS longitude,
+            CAST(u."Latitude" AS DOUBLE PRECISION) AS latitude,
+            u."hotResearch" as hotresearch, 
+            u."AccountStatus" as accountstatus,
+            u."Email" as email, 
+            u."PhoneNumber" as phonenumber,
+            u."GymDescription" as gymdescription, 
+            u."AvatarUrl" as avatarurl,
+            u."GymImages" as gymimages, 
+            u."CreatedAt" as createdat,
+            u."UpdatedAt" as updatedat, 
+            u."Dob" as dob
+        FROM "AspNetUsers" u
+        LEFT JOIN "Addresses" a ON u."Id" = a."CustomerId" AND a."IsEnabled" = true
+        WHERE u."AccountStatus" = 'Active'
+        AND u."GymName" IS NOT NULL 
+        AND u."GymName" != ''
+        AND u."Latitude" IS NOT NULL 
+        AND u."Longitude" IS NOT NULL
+        AND CAST(u."Latitude" AS DOUBLE PRECISION) BETWEEN {latitude - lat_range} AND {latitude + lat_range}
+        AND CAST(u."Longitude" AS DOUBLE PRECISION) BETWEEN {longitude - lng_range} AND {longitude + lng_range}
     ),
     DistanceCalculated AS (
         SELECT *,
@@ -594,49 +612,80 @@ def intelligent_gym_search(user_input):
             primary_keyword = valid_keywords[0]
             sql_query = f"""
             SELECT 
-                "Id" as id, "GymName" as gymname, "FullName" as fullname,
-                "GymAddress" as gymaddress, "TaxCode" as taxcode,
-                "Longitude" as longitude, "Latitude" as latitude,
-                "hotResearch" as hotresearch, "AccountStatus" as accountstatus,
-                "Email" as email, "PhoneNumber" as phonenumber,
-                "GymDescription" as gymdescription, "AvatarUrl" as avatarurl,
-                "GymImages" as gymimages, "CreatedAt" as createdat,
-                "UpdatedAt" as updatedat, "Dob" as dob,
-                CASE WHEN "hotResearch" = true THEN 20 ELSE 0 END as hot_score,
+                u."Id" as id, u."GymName" as gymname, u."FullName" as fullname,
+                COALESCE(
+                    CONCAT_WS(', ', 
+                        NULLIF(a."HouseNumber", ''), 
+                        NULLIF(a."Street", ''), 
+                        NULLIF(a."Ward", ''), 
+                        NULLIF(a."District", ''), 
+                        NULLIF(a."City", '')
+                    ), 
+                    'Địa chỉ chưa cập nhật'
+                ) as gymaddress,
+                u."TaxCode" as taxcode,
+                u."Longitude" as longitude, u."Latitude" as latitude,
+                u."hotResearch" as hotresearch, u."AccountStatus" as accountstatus,
+                u."Email" as email, u."PhoneNumber" as phonenumber,
+                u."GymDescription" as gymdescription, u."AvatarUrl" as avatarurl,
+                u."GymImages" as gymimages, u."CreatedAt" as createdat,
+                u."UpdatedAt" as updatedat, u."Dob" as dob,
+                CASE WHEN u."hotResearch" = true THEN 20 ELSE 0 END as hot_score,
                 CASE 
-                    WHEN "GymName" ILIKE '%{primary_keyword}%' THEN 30
-                    WHEN "GymAddress" ILIKE '%{primary_keyword}%' THEN 25
-                    WHEN "FullName" ILIKE '%{primary_keyword}%' THEN 15
+                    WHEN u."GymName" ILIKE '%{primary_keyword}%' THEN 30
+                    WHEN COALESCE(
+                        CONCAT_WS(', ', 
+                            NULLIF(a."HouseNumber", ''), 
+                            NULLIF(a."Street", ''), 
+                            NULLIF(a."Ward", ''), 
+                            NULLIF(a."District", ''), 
+                            NULLIF(a."City", '')
+                        ), 
+                        'Địa chỉ chưa cập nhật'
+                    ) ILIKE '%{primary_keyword}%' THEN 25
+                    WHEN u."FullName" ILIKE '%{primary_keyword}%' THEN 15
                     ELSE 5
                 END as relevance_score,
                 CASE 
-                    WHEN "CreatedAt" >= (CURRENT_DATE - INTERVAL '1 year') THEN 5 
+                    WHEN u."CreatedAt" >= (CURRENT_DATE - INTERVAL '1 year') THEN 5 
                     ELSE 0 
                 END as recency_score
-            FROM "AspNetUsers" 
-            WHERE {where_clause}
+            FROM "AspNetUsers" u
+            LEFT JOIN "Addresses" a ON u."Id" = a."CustomerId" AND a."IsEnabled" = true
+            WHERE u.{where_clause.replace('"AccountStatus"', '"AccountStatus"').replace('"GymName"', '"GymName"')}
             ORDER BY hot_score DESC, relevance_score DESC, recency_score DESC, gymname ASC
             """
         else:
             # Query cho tìm kiếm general hoặc hot gym
             sql_query = f"""
             SELECT 
-                "Id" as id, "GymName" as gymname, "FullName" as fullname,
-                "GymAddress" as gymaddress, "TaxCode" as taxcode,
-                "Longitude" as longitude, "Latitude" as latitude,
-                "hotResearch" as hotresearch, "AccountStatus" as accountstatus,
-                "Email" as email, "PhoneNumber" as phonenumber,
-                "GymDescription" as gymdescription, "AvatarUrl" as avatarurl,
-                "GymImages" as gymimages, "CreatedAt" as createdat,
-                "UpdatedAt" as updatedat, "Dob" as dob,
-                CASE WHEN "hotResearch" = true THEN 20 ELSE 0 END as hot_score,
+                u."Id" as id, u."GymName" as gymname, u."FullName" as fullname,
+                COALESCE(
+                    CONCAT_WS(', ', 
+                        NULLIF(a."HouseNumber", ''), 
+                        NULLIF(a."Street", ''), 
+                        NULLIF(a."Ward", ''), 
+                        NULLIF(a."District", ''), 
+                        NULLIF(a."City", '')
+                    ), 
+                    'Địa chỉ chưa cập nhật'
+                ) as gymaddress,
+                u."TaxCode" as taxcode,
+                u."Longitude" as longitude, u."Latitude" as latitude,
+                u."hotResearch" as hotresearch, u."AccountStatus" as accountstatus,
+                u."Email" as email, u."PhoneNumber" as phonenumber,
+                u."GymDescription" as gymdescription, u."AvatarUrl" as avatarurl,
+                u."GymImages" as gymimages, u."CreatedAt" as createdat,
+                u."UpdatedAt" as updatedat, u."Dob" as dob,
+                CASE WHEN u."hotResearch" = true THEN 20 ELSE 0 END as hot_score,
                 10 as relevance_score,
                 CASE 
-                    WHEN "CreatedAt" >= (CURRENT_DATE - INTERVAL '1 year') THEN 5 
+                    WHEN u."CreatedAt" >= (CURRENT_DATE - INTERVAL '1 year') THEN 5 
                     ELSE 0 
                 END as recency_score
-            FROM "AspNetUsers" 
-            WHERE {where_clause}
+            FROM "AspNetUsers" u
+            LEFT JOIN "Addresses" a ON u."Id" = a."CustomerId" AND a."IsEnabled" = true
+            WHERE u.{where_clause.replace('"AccountStatus"', '"AccountStatus"').replace('"GymName"', '"GymName"')}
             ORDER BY hot_score DESC, relevance_score DESC, recency_score DESC, gymname ASC
             """
         
@@ -695,20 +744,31 @@ def classify_query(user_input):
             # Trường hợp muốn xem tất cả gym
             return True, """
             SELECT 
-                "Id" as id, "GymName" as gymname, "FullName" as fullname,
-                "GymAddress" as gymaddress, "TaxCode" as taxcode,
-                "Longitude" as longitude, "Latitude" as latitude,
-                "hotResearch" as hotresearch, "AccountStatus" as accountstatus,
-                "Email" as email, "PhoneNumber" as phonenumber,
-                "GymDescription" as gymdescription, "AvatarUrl" as avatarurl,
-                "GymImages" as gymimages, "CreatedAt" as createdat,
-                "UpdatedAt" as updatedat, "Dob" as dob,
-                CASE WHEN "hotResearch" = true THEN 20 ELSE 0 END as hot_score,
+                u."Id" as id, u."GymName" as gymname, u."FullName" as fullname,
+                COALESCE(
+                    CONCAT_WS(', ', 
+                        NULLIF(a."HouseNumber", ''), 
+                        NULLIF(a."Street", ''), 
+                        NULLIF(a."Ward", ''), 
+                        NULLIF(a."District", ''), 
+                        NULLIF(a."City", '')
+                    ), 
+                    'Địa chỉ chưa cập nhật'
+                ) as gymaddress,
+                u."TaxCode" as taxcode,
+                u."Longitude" as longitude, u."Latitude" as latitude,
+                u."hotResearch" as hotresearch, u."AccountStatus" as accountstatus,
+                u."Email" as email, u."PhoneNumber" as phonenumber,
+                u."GymDescription" as gymdescription, u."AvatarUrl" as avatarurl,
+                u."GymImages" as gymimages, u."CreatedAt" as createdat,
+                u."UpdatedAt" as updatedat, u."Dob" as dob,
+                CASE WHEN u."hotResearch" = true THEN 20 ELSE 0 END as hot_score,
                 10 as relevance_score
-            FROM "AspNetUsers" 
-            WHERE "AccountStatus" = 'Active'
-            AND "GymName" IS NOT NULL 
-            AND "GymName" != ''
+            FROM "AspNetUsers" u
+            LEFT JOIN "Addresses" a ON u."Id" = a."CustomerId" AND a."IsEnabled" = true
+            WHERE u."AccountStatus" = 'Active'
+            AND u."GymName" IS NOT NULL 
+            AND u."GymName" != ''
             ORDER BY hot_score DESC, gymname ASC
             """
         
@@ -745,7 +805,7 @@ def get_response_with_history(user_input, conversation_history=None, longitude=N
             results = query_database(sql_query)
 
             if isinstance(results, str) or not results:
-                response_text = f"🤔 Không tìm thấy gym nào trong bán kính {max_distance}km. Hãy thử mở rộng khu vực tìm kiếm!"
+                response_text = f"Không tìm thấy gym nào trong bán kính {max_distance}km. Hãy thử mở rộng khu vực tìm kiếm!"
                 current_conversation.append({
                     "role": "assistant",
                     "content": sanitize_text_for_json(response_text),
@@ -781,7 +841,7 @@ def get_response_with_history(user_input, conversation_history=None, longitude=N
         if is_db_query:
             results = query_database(sql_query)
             if isinstance(results, str) or not results:
-                response_text = "🤔 Không tìm thấy gym nào phù hợp với tiêu chí của bạn. Hãy thử tìm kiếm khác!"
+                response_text = "Không tìm thấy gym nào phù hợp với tiêu chí của bạn. Hãy thử tìm kiếm khác!"
                 current_conversation.append({
                     "role": "assistant",
                     "content": sanitize_text_for_json(response_text),
@@ -841,8 +901,8 @@ def get_response_with_history(user_input, conversation_history=None, longitude=N
 
     except Exception as e:
         print(f"Lỗi trong get_response_with_history: {str(e)}")
-        error_response = "🤖 Xin lỗi, đã xảy ra lỗi hệ thống. Vui lòng thử lại!"
-        
+        error_response = "Xin lỗi, đã xảy ra lỗi hệ thống. Vui lòng thử lại!"
+
         if 'current_conversation' in locals():
             current_conversation.append({
                 "role": "assistant", 
@@ -859,25 +919,25 @@ def get_response_with_history(user_input, conversation_history=None, longitude=N
 def create_simple_response(gyms, user_input, is_nearby=False):
     """Tạo phản hồi đơn giản cho kết quả tìm kiếm gym"""
     if not gyms:
-        return "🤔 Không tìm thấy gym nào phù hợp với tiêu chí của bạn."
-    
+        return "Không tìm thấy gym nào phù hợp với tiêu chí của bạn."
+
     if len(gyms) == 1:
         gym = gyms[0]
-        response = f"🏋️ **{gym['gymName']}**"
+        response = f"**{gym['gymName']}**"
         if gym.get('distance_km'):
             response += f" - {format_distance_friendly(gym['distance_km'])}"
         if gym['address']:
-            response += f"\n📍 {gym['address']}"
+            response += f"\nĐịa chỉ: {gym['address']}"
         if gym['hotResearch']:
-            response += "\n🔥 Đây là phòng gym rất được yêu thích!"
+            response += "\nĐây là phòng gym rất được yêu thích!"
         return response
     
     elif len(gyms) <= 3:
-        response = f"🏋️ **Tìm thấy {len(gyms)} phòng gym:**\n"
+        response = f"**Tìm thấy {len(gyms)} phòng gym:**\n"
         for i, gym in enumerate(gyms, 1):
             name = gym['gymName']
             if gym['hotResearch']:
-                name += " 🔥"
+                name += " (Hot)"
             if gym.get('distance_km'):
                 name += f" ({format_distance_friendly(gym['distance_km'])})"
             response += f"{i}. **{name}**\n"
@@ -885,10 +945,10 @@ def create_simple_response(gyms, user_input, is_nearby=False):
     
     else:
         hot_gyms = [g for g in gyms if g['hotResearch']]
-        response = f"🏋️ **Tìm thấy {len(gyms)} phòng gym!**\n"
-        
+        response = f"**Tìm thấy {len(gyms)} phòng gym!**\n"
+
         if hot_gyms:
-            response += "🔥 **Các phòng gym phổ biến:**\n"
+            response += "**Các phòng gym phổ biến:**\n"
             for i, gym in enumerate(hot_gyms, 1):
                 name = gym['gymName']
                 if gym.get('distance_km'):
