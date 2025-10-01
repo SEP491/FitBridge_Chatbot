@@ -533,7 +533,8 @@ def intelligent_gym_search(user_input):
             'tìm', 'find', 'search', 'có', 'không', 'nào', 'đâu', 'where', 
             'what', 'gì', 'là', 'ở', 'tại', 'trong', 'của', 'một', 'vài', 
             'những', 'các', 'the', 'a', 'an', 'and', 'or', 'for', 'gym', 
-            'phòng', 'fitness', 'center', 'club'
+            'phòng', 'fitness', 'center', 'club', 'quận', 'district', 'quan',
+            'tim', 'phong'  # Thêm các từ đã được normalize
         }
         
         words = re.findall(r'\b\w+\b', normalize_vietnamese_text(user_input))
@@ -549,18 +550,42 @@ def intelligent_gym_search(user_input):
         
         # Phát hiện địa điểm cụ thể
         location_patterns = [
-            r'(quận|district)\s*(\d+)',
-            r'(huyện|county)\s*(\w+)',
-            r'(thành phố|city|tp\.?)\s*(\w+)',
-            r'(ở|tại|in|at)\s*(\w+)'
+            r'(quận|district)\s*([\w\s]+?)(?:\s|$|,|\.)',  # Match multi-word district names
+            r'(huyện|county)\s*([\w\s]+?)(?:\s|$|,|\.)',
+            r'(thành phố|city|tp\.?)\s*([\w\s]+?)(?:\s|$|,|\.)',
+            r'(ở|tại|in|at)\s*([\w\s]+?)(?:\s|$|,|\.)'
         ]
         
+        district_number = None
+        district_name = None
+        specific_location = None
+
         for pattern in location_patterns:
             match = re.search(pattern, user_input_lower)
             if match:
-                search_info['location'] = match.group(0)
-                break
-        
+                if 'quận' in pattern or 'district' in pattern:
+                    location_part = match.group(2).strip()
+
+                    # Xử lý quận có số (Quận 1, Quận 3, Quận 7, etc.)
+                    number_match = re.search(r'^(\d+)$', location_part)
+                    if number_match:
+                        district_number = number_match.group(1)
+                        specific_location = f"quận {district_number}"
+                    else:
+                        # Xử lý quận có tên (Quận Hải Châu, Quận Đống Đa, etc.)
+                        # Loại bỏ các từ không cần thiết ở cuối
+                        cleaned_name = re.sub(r'\s*(gym|phòng|fitness|tìm|find).*$', '', location_part, flags=re.IGNORECASE).strip()
+                        if cleaned_name:
+                            district_name = cleaned_name
+                            specific_location = f"quận {district_name}"
+
+                    search_info['location'] = specific_location
+                    search_info['search_type'] = 'district_specific'
+                    break
+                else:
+                    search_info['location'] = match.group(0)
+                    break
+
         # 4. Xây dựng truy vấn SQL thông minh cho AspNetUsers table
         base_conditions = ['"AccountStatus" = \'Active\'', '"GymName" IS NOT NULL', '"GymName" != \'\'']
 
@@ -569,42 +594,71 @@ def intelligent_gym_search(user_input):
             base_conditions.append('"hotResearch" = true')
             search_info['search_type'] = 'hot'
         
-        # Xây dựng điều kiện tìm kiếm từ keywords
+        # Xây dựng điều kiện tìm kiếm từ keywords - chỉ khi không phải district_specific
         search_conditions = []
         valid_keywords = []
         
-        for keyword in search_info['keywords']:
-            if keyword and len(keyword) >= 2:
-                # Escape single quotes để tránh SQL injection
-                safe_keyword = keyword.replace("'", "''")
-                valid_keywords.append(safe_keyword)
-                search_conditions.extend([
-                    f'"GymName" ILIKE \'%{safe_keyword}%\'',
-                    f'COALESCE(CONCAT_WS(\', \', NULLIF(a."HouseNumber", \'\'), NULLIF(a."Street", \'\'), NULLIF(a."Ward", \'\'), NULLIF(a."District", \'\'), NULLIF(a."City", \'\')), \'Địa chỉ chưa cập nhật\') ILIKE \'%{safe_keyword}%\'',
-                    f'"FullName" ILIKE \'%{safe_keyword}%\''
-                ])
-        
-        # Thêm điều kiện địa điểm nếu có
+        # Nếu không phải tìm kiếm theo quận cụ thể, mới áp dụng keyword filtering
+        if search_info['search_type'] != 'district_specific':
+            for keyword in search_info['keywords']:
+                if keyword and len(keyword) >= 2:
+                    # Escape single quotes để tránh SQL injection
+                    safe_keyword = keyword.replace("'", "''")
+                    valid_keywords.append(safe_keyword)
+                    search_conditions.extend([
+                        f'"GymName" ILIKE \'%{safe_keyword}%\'',
+                        f'COALESCE(CONCAT_WS(\', \', NULLIF(a."HouseNumber", \'\'), NULLIF(a."Street", \'\'), NULLIF(a."Ward", \'\'), NULLIF(a."District", \'\'), NULLIF(a."City", \'\')), \'Địa chỉ chưa cập nhật\') ILIKE \'%{safe_keyword}%\'',
+                        f'"FullName" ILIKE \'%{safe_keyword}%\''
+                    ])
+
+        # Thêm điều kiện địa điểm nếu có - Cải thiện logic filtering
+        district_conditions = []
         if search_info['location']:
             safe_location = search_info['location'].replace("'", "''")
-            search_conditions.extend([
-                f'COALESCE(CONCAT_WS(\', \', NULLIF(a."HouseNumber", \'\'), NULLIF(a."Street", \'\'), NULLIF(a."Ward", \'\'), NULLIF(a."District", \'\'), NULLIF(a."City", \'\')), \'Địa chỉ chưa cập nhật\') ILIKE \'%{safe_location}%\'',
-                f'"GymName" ILIKE \'%{safe_location}%\''
-            ])
-        
+
+            # Nếu tìm kiếm theo quận cụ thể, sử dụng logic filtering chính xác
+            if search_info['search_type'] == 'district_specific':
+                if district_number:
+                    # Xử lý quận có số (Quận 1, Quận 3, Quận 7, etc.)
+                    district_conditions = [
+                        f'COALESCE(CONCAT_WS(\', \', NULLIF(a."HouseNumber", \'\'), NULLIF(a."Street", \'\'), NULLIF(a."Ward", \'\'), NULLIF(a."District", \'\'), NULLIF(a."City", \'\')), \'Địa chỉ chưa cập nhật\') ILIKE \'%quận {district_number}%\'',
+                        f'COALESCE(CONCAT_WS(\', \', NULLIF(a."HouseNumber", \'\'), NULLIF(a."Street", \'\'), NULLIF(a."Ward", \'\'), NULLIF(a."District", \'\'), NULLIF(a."City", \'\')), \'Địa chỉ chưa cập nhật\') ILIKE \'%district {district_number}%\'',
+                        f'a."District" ILIKE \'%quận {district_number}%\'',
+                        f'a."District" ILIKE \'%district {district_number}%\''
+                    ]
+                elif district_name:
+                    # Xử lý quận có tên (Quận Hải Châu, Quận Đống Đa, etc.)
+                    safe_district_name = district_name.replace("'", "''")
+                    district_conditions = [
+                        f'COALESCE(CONCAT_WS(\', \', NULLIF(a."HouseNumber", \'\'), NULLIF(a."Street", \'\'), NULLIF(a."Ward", \'\'), NULLIF(a."District", \'\'), NULLIF(a."City", \'\')), \'Địa chỉ chưa cập nhật\') ILIKE \'%quận {safe_district_name}%\'',
+                        f'COALESCE(CONCAT_WS(\', \', NULLIF(a."HouseNumber", \'\'), NULLIF(a."Street", \'\'), NULLIF(a."Ward", \'\'), NULLIF(a."District", \'\'), NULLIF(a."City", \'\')), \'Địa chỉ chưa cập nhật\') ILIKE \'%district {safe_district_name}%\'',
+                        f'a."District" ILIKE \'%quận {safe_district_name}%\'',
+                        f'a."District" ILIKE \'%{safe_district_name}%\'',
+                        f'a."District" = \'Quận {safe_district_name}\''
+                    ]
+
+                # Thêm điều kiện quận như một điều kiện bắt buộc (AND), không phải tùy chọn (OR)
+                base_conditions.append(f"({' OR '.join(district_conditions)})")
+            else:
+                # Tìm kiếm địa điểm chung khác
+                search_conditions.extend([
+                    f'COALESCE(CONCAT_WS(\', \', NULLIF(a."HouseNumber", \'\'), NULLIF(a."Street", \'\'), NULLIF(a."Ward", \'\'), NULLIF(a."District", \'\'), NULLIF(a."City", \'\')), \'Địa chỉ chưa cập nhật\') ILIKE \'%{safe_location}%\'',
+                    f'"GymName" ILIKE \'%{safe_location}%\''
+                ])
+
         # Xây dựng mệnh đề WHERE
         where_clause = " AND ".join(base_conditions)
         
         if search_conditions:
             keyword_clause = " OR ".join(search_conditions)
             where_clause += f" AND ({keyword_clause})"
-        elif not search_info['hot_search']:
-            # Nếu không có từ khóa và không phải tìm kiếm hot, return None
+        elif not search_info['hot_search'] and search_info['search_type'] != 'district_specific':
+            # Nếu không có từ khóa và không phải tìm kiếm hot và không phải tìm kiếm theo quận cụ thể, return None
             return None
         
         # 5. Tạo SQL query với scoring thông minh
-        if valid_keywords:
-            primary_keyword = valid_keywords[0]
+        if valid_keywords or search_info['search_type'] == 'district_specific':
+            primary_keyword = valid_keywords[0] if valid_keywords else 'gym'
             sql_query = f"""
             SELECT 
                 u."Id" as id, u."GymName" as gymname, u."FullName" as fullname,
@@ -647,7 +701,7 @@ def intelligent_gym_search(user_input):
                 END as recency_score
             FROM "AspNetUsers" u
             LEFT JOIN "Addresses" a ON u."Id" = a."CustomerId" AND a."IsEnabled" = true
-            WHERE u.{where_clause.replace('"AccountStatus"', '"AccountStatus"').replace('"GymName"', '"GymName"')}
+            WHERE {where_clause}
             ORDER BY hot_score DESC, relevance_score DESC, recency_score DESC, gymname ASC
             """
         else:
@@ -680,7 +734,7 @@ def intelligent_gym_search(user_input):
                 END as recency_score
             FROM "AspNetUsers" u
             LEFT JOIN "Addresses" a ON u."Id" = a."CustomerId" AND a."IsEnabled" = true
-            WHERE u.{where_clause.replace('"AccountStatus"', '"AccountStatus"').replace('"GymName"', '"GymName"')}
+            WHERE {where_clause}
             ORDER BY hot_score DESC, relevance_score DESC, recency_score DESC, gymname ASC
             """
         
