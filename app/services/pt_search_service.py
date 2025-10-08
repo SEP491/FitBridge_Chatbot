@@ -6,13 +6,20 @@ from app.utils.text_utils import normalize_vietnamese_text
 from app.database.connection import query_database
 
 
-def build_nearby_trainer_query(longitude, latitude, max_distance_km=10):
+def build_nearby_trainer_query(longitude, latitude, max_distance_km=10, user_input=""):
     """
     Xây dựng truy vấn SQL để tìm Personal Trainer gần người dùng
     Ưu tiên trainer từ các gym gần nhất
     """
     lat_range = max_distance_km / 111.0
     lng_range = max_distance_km / (111.0 * abs(math.cos(math.radians(latitude))))
+
+    # Extract experience requirement nếu có
+    exp_operator, exp_years = extract_experience_requirement(user_input)
+    experience_filter = ""
+    if exp_operator and exp_years:
+        experience_filter = f"\n        HAVING ud.\"Experience\" {exp_operator} {exp_years}"
+        print(f"🎯 EXPERIENCE_FILTER (nearby): Lọc PT có kinh nghiệm {exp_operator} {exp_years} năm")
 
     return f"""
     WITH NearbyGyms AS (
@@ -84,7 +91,7 @@ def build_nearby_trainer_query(longitude, latitude, max_distance_km=10):
         WHERE pt."AccountStatus" = 'Active'
             AND pt."GymOwnerId" IS NOT NULL
         GROUP BY pt."Id", ud."Experience", ud."Certificates", ud."Height", 
-                 ud."Weight", ud."Biceps", ud."Chest", ud."Waist"
+                 ud."Weight", ud."Biceps", ud."Chest", ud."Waist"{experience_filter}
     )
     -- Kết hợp PT với gym gần nhất
     SELECT 
@@ -104,6 +111,76 @@ def build_nearby_trainer_query(longitude, latitude, max_distance_km=10):
         t.experience DESC NULLS LAST,
         t.fullname ASC
     """
+
+
+def extract_experience_requirement(user_input):
+    """
+    Trích xuất yêu cầu về kinh nghiệm từ input của người dùng
+    Returns: tuple (operator, years) hoặc (None, None) nếu không có
+    Operator: '>=', '>', '=', '<', '<='
+    """
+    user_input_lower = user_input.lower()
+
+    # Pattern 1: "ít nhất X năm" hoặc "tối thiểu X năm"
+    patterns_gte = [
+        r'ít nhất\s+(\d+)\s*năm',
+        r'tối thiểu\s+(\d+)\s*năm',
+        r'từ\s+(\d+)\s*năm',
+        r'trên\s+(\d+)\s*năm',
+        r'at least\s+(\d+)\s*year',
+        r'minimum\s+(\d+)\s*year',
+    ]
+
+    for pattern in patterns_gte:
+        match = re.search(pattern, user_input_lower)
+        if match:
+            years = int(match.group(1))
+            return ('>=', years)
+
+    # Pattern 2: "nhiều hơn X năm" hoặc "hơn X năm"
+    patterns_gt = [
+        r'nhiều hơn\s+(\d+)\s*năm',
+        r'hơn\s+(\d+)\s*năm',
+        r'more than\s+(\d+)\s*year',
+        r'over\s+(\d+)\s*year',
+    ]
+
+    for pattern in patterns_gt:
+        match = re.search(pattern, user_input_lower)
+        if match:
+            years = int(match.group(1))
+            return ('>', years)
+
+    # Pattern 3: "dưới X năm" hoặc "ít hơn X năm"
+    patterns_lt = [
+        r'dưới\s+(\d+)\s*năm',
+        r'ít hơn\s+(\d+)\s*năm',
+        r'under\s+(\d+)\s*year',
+        r'less than\s+(\d+)\s*year',
+    ]
+
+    for pattern in patterns_lt:
+        match = re.search(pattern, user_input_lower)
+        if match:
+            years = int(match.group(1))
+            return ('<', years)
+
+    # Pattern 4: "có X năm kinh nghiệm" (exact match)
+    patterns_eq = [
+        r'có\s+(\d+)\s*năm\s+kinh nghiệm',
+        r'(\d+)\s*năm\s+kinh nghiệm',
+        r'kinh nghiệm\s+(\d+)\s*năm',
+        r'(\d+)\s*year[s]?\s+experience',
+        r'experience[d]?\s+(\d+)\s*year',
+    ]
+
+    for pattern in patterns_eq:
+        match = re.search(pattern, user_input_lower)
+        if match:
+            years = int(match.group(1))
+            return ('=', years)  # Interpret "có X năm" as "ít nhất X năm"
+
+    return (None, None)
 
 
 def build_trainer_search_query(user_input, longitude=None, latitude=None):
@@ -134,29 +211,8 @@ def build_trainer_search_query(user_input, longitude=None, latitude=None):
             if any(kw in user_input_lower for kw in keywords):
                 goal_keywords.append(goal)
 
-        # Trích xuất các từ khóa quan trọng (bỏ các từ liên quan đến goal, gender và common words)
-        stop_words = {
-            # Common words
-            'tìm', 'find', 'search', 'tim', 'cho', 'giúp', 'giup', 'help', 'me',
-            'tôi', 'toi', 'mình', 'minh', 'của', 'cua', 'my', 'i', 'we', 'us',
-            'muốn', 'muon', 'cần', 'can', 'need', 'want', 'hãy', 'hay', 'please',
-            'với', 'voi', 'và', 'va', 'or', 'and', 'with',
-
-            # PT related
-            'pt', 'huấn luyện viên', 'huan luyen vien', 'trainer', 'hlv',
-            'personal', 'coach', 'giáo viên', 'giao vien', 'thể dục', 'the duc',
-
-            # Goal related
-            'chuyên', 'chuyen', 'giảm', 'giam', 'cân', 'can', 'tăng', 'tang',
-            'cơ', 'co', 'thể', 'the', 'hình', 'hinh', 'sức', 'suc', 'mạnh',
-            'manh', 'bền', 'ben',
-
-            # Gender related
-            'nữ', 'nu', 'nam', 'male', 'female', 'girl', 'boy', 'woman', 'man',
-            'đàn ông', 'dan ong', 'đàn bà', 'dan ba', 'phụ nữ', 'phu nu'
-        }
-        words = re.findall(r'\b\w+\b', normalize_vietnamese_text(user_input))
-        search_keywords = [w for w in words if w not in stop_words and len(w) >= 2][:3]
+        # Extract experience requirement
+        exp_operator, exp_years = extract_experience_requirement(user_input)
 
         # Xây dựng base conditions cho PT
         pt_base_conditions = [
@@ -168,7 +224,7 @@ def build_trainer_search_query(user_input, longitude=None, latitude=None):
         if longitude and latitude and any(kw in user_input_lower for kw in
             ['gần', 'near', 'nearby', 'xung quanh', 'lân cận']):
             max_distance = get_trainer_distance_preference(user_input)
-            return build_nearby_trainer_query(longitude, latitude, max_distance)
+            return build_nearby_trainer_query(longitude, latitude, max_distance, user_input)
 
         # Thêm filter theo goal trainings (JOIN trực tiếp với GoalTrainings)
         goal_join_conditions = []
@@ -176,35 +232,26 @@ def build_trainer_search_query(user_input, longitude=None, latitude=None):
             goal_list = "', '".join([g.replace("'", "''") for g in goal_keywords])
             goal_join_conditions.append(f"gt.\"Name\" IN ('{goal_list}')")
 
-        # Xây dựng search conditions cho tên PT
-        name_conditions = []
-
         # Kiểm tra gender - Ưu tiên cao hơn, check trước khi xử lý keywords
         if 'nữ' in user_input_lower or 'female' in user_input_lower or 'nu' in normalize_vietnamese_text(user_input):
             pt_base_conditions.append('pt."IsMale" = false')
         elif 'nam' in user_input_lower or 'male' in user_input_lower:
             pt_base_conditions.append('pt."IsMale" = true')
 
-        # Search by name keywords (chỉ khi có keywords hợp lệ)
-        if search_keywords:
-            for keyword in search_keywords:
-                if keyword and len(keyword) >= 3:  # Tăng minimum length lên 3 để tránh noise
-                    safe_kw = keyword.replace("'", "''")
-                    name_conditions.append(f'pt."FullName" ILIKE \'%{safe_kw}%\'')
-
-        # Build WHERE clause - QUAN TRỌNG: Chỉ thêm name_conditions nếu có
+        # Build WHERE clause - LOẠI BỎ name_conditions
         where_parts = []
         where_parts.append(f"({' AND '.join(pt_base_conditions)})")
 
         if goal_join_conditions:
             where_parts.append(f"({' AND '.join(goal_join_conditions)})")
 
-        # CHỈ thêm name_conditions nếu THỰC SỰ có keywords hợp lệ
-        # KHÔNG thêm vào where_clause nếu rỗng
-        if name_conditions:
-            where_parts.append(f"({' OR '.join(name_conditions)})")
-
         where_clause = " AND ".join(where_parts)
+
+        # Build experience filter cho TrainersWithGoals CTE
+        experience_filter = ""
+        if exp_operator and exp_years:
+            experience_filter = f"\n            HAVING ud.\"Experience\" {exp_operator} {exp_years}"
+            print(f"🎯 EXPERIENCE_FILTER: Lọc PT có kinh nghiệm {exp_operator} {exp_years} năm")
 
         # Build final query với cấu trúc mới
         query = f"""
@@ -243,7 +290,7 @@ def build_trainer_search_query(user_input, longitude=None, latitude=None):
             LEFT JOIN "PTGoalTrainings" pgt ON pt."Id" = pgt."ApplicationUsersId"
             LEFT JOIN "GoalTrainings" gt ON pgt."GoalTrainingsId" = gt."Id" AND gt."IsEnabled" = true
             GROUP BY pt."Id", ud."Experience", ud."Certificates", ud."Height", 
-                     ud."Weight", ud."Biceps", ud."Chest", ud."Waist"
+                     ud."Weight", ud."Biceps", ud."Chest", ud."Waist"{experience_filter}
         )
         SELECT 
             t.*,
