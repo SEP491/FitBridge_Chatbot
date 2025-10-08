@@ -5,8 +5,11 @@ import google.generativeai as genai
 from app.utils.text_utils import sanitize_text_for_json, build_conversation_context
 from app.utils.format_utils import format_distance_friendly
 from app.services.search_service import classify_query_with_context, build_nearby_gym_query, get_nearby_distance_preference
+from app.services.pt_search_service import classify_trainer_query, build_nearby_trainer_query, get_trainer_distance_preference
+from app.services.pt_recommendation_service import create_trainer_response
 from app.database.connection import query_database
 from app.models.gym_models import safe_get_row_data
+from app.models.trainer_models import safe_get_trainer_data
 from config import GEMINI_API_KEY
 
 # Cấu hình Gemini API
@@ -89,7 +92,50 @@ def get_response_with_history(user_input, conversation_history=None, longitude=N
             "timestamp": datetime.now().isoformat()
         })
         
-        # Xử lý tìm kiếm gần với tọa độ
+        # PRIORITY 1: Xử lý tìm kiếm Personal Trainer
+        is_trainer_query, trainer_sql = classify_trainer_query(user_input, longitude, latitude)
+
+        if is_trainer_query:
+            print(f"🏋️ TRAINER_SEARCH: Detected trainer search request")
+
+            # Xử lý tìm kiếm PT gần với tọa độ
+            if longitude and latitude and any(keyword in user_input.lower() for keyword in ["gần", "near", "nearby", "xung quanh", "lân cận"]):
+                max_distance = get_trainer_distance_preference(user_input)
+                print(f"🎯 TRAINER SMART RADIUS: Bán kính được chọn: {max_distance}km")
+                trainer_sql = build_nearby_trainer_query(longitude, latitude, max_distance)
+
+            results = query_database(trainer_sql)
+
+            if isinstance(results, str) or not results:
+                response_text = "Không tìm thấy huấn luyện viên nào phù hợp với yêu cầu của bạn. Hãy thử mở rộng tiêu chí tìm kiếm!"
+                current_conversation.append({
+                    "role": "assistant",
+                    "content": sanitize_text_for_json(response_text),
+                    "timestamp": datetime.now().isoformat()
+                })
+                return {
+                    "promptResponse": sanitize_text_for_json(response_text),
+                    "conversation_history": current_conversation
+                }
+
+            trainers = [safe_get_trainer_data(row) for row in results]
+            print(f"🎯 TRAINER_RESULT: Tìm thấy {len(trainers)} huấn luyện viên")
+
+            is_nearby = longitude and latitude and any(kw in user_input.lower() for kw in ["gần", "near", "nearby"])
+            prompt_response = create_trainer_response(trainers, user_input, is_nearby)
+
+            current_conversation.append({
+                "role": "assistant",
+                "content": sanitize_text_for_json(prompt_response),
+                "timestamp": datetime.now().isoformat()
+            })
+            return {
+                "trainers": trainers,
+                "promptResponse": sanitize_text_for_json(prompt_response),
+                "conversation_history": current_conversation
+            }
+
+        # PRIORITY 2: Xử lý tìm kiếm gym gần với tọa độ
         if longitude and latitude and any(keyword in user_input.lower() for keyword in ["gần", "near", "nearby", "xung quanh", "lân cận", "gần đây", "quanh đây"]):
             max_distance = get_nearby_distance_preference(user_input)
             print(f"🎯 SMART RADIUS: User input '{user_input}' → Bán kính được chọn: {max_distance}km")
@@ -127,7 +173,7 @@ def get_response_with_history(user_input, conversation_history=None, longitude=N
                 "conversation_history": current_conversation
             }
         
-        # Truy vấn cơ sở dữ liệu thông thường
+        # PRIORITY 3: Truy vấn cơ sở dữ liệu thông thường (gym search)
         is_db_query, sql_query = classify_query_with_context(user_input, conversation_context)
         print(f"🔍 QUERY_CLASSIFICATION: is_db_query={is_db_query}, user_input='{user_input}'")
         
@@ -161,18 +207,19 @@ def get_response_with_history(user_input, conversation_history=None, longitude=N
                 "conversation_history": current_conversation
             }
 
-        # Hội thoại tự do với Gemini
+        # PRIORITY 4: Hội thoại tự do với Gemini
         enhanced_context = f"""
-        Bạn là FitBridge AI - trợ lý tìm kiếm phòng gym thân thiện và chuyên nghiệp tại Việt Nam.
+        Bạn là FitBridge AI - trợ lý tìm kiếm phòng gym và huấn luyện viên cá nhân thân thiện và chuyên nghiệp tại Việt Nam.
         
         Khả năng:
-        - Đưa ra gợi ý phòng gym và thông tin chi tiết
+        - Đưa ra gợi ý phòng gym, huấn luyện viên cá nhân (PT) và thông tin chi tiết
         - Tư vấn thể dục và lịch tập luyện dựa trên mục tiêu
         - Chia sẻ kiến thức về sức khỏe và thể hình
         - Nhớ ngữ cảnh hội thoại để tư vấn nhất quán
-        - Không đưa ra các câu trả lời liên quan đến các lĩnh vực khác chỉ trả lời các câu hỏi về gym, thể dục, sức khỏe.
-        Ví dụ: Nếu người dùng hỏi về 1 chủ đề bất kỳ không liên quan đến gym, thể dục, sức khỏe, bạn hãy trả lời rằng: "Xin lỗi, tôi chỉ có thể hỗ trợ các câu hỏi liên quan đến gym, thể dục, những lĩnh vực khác không nằm trong chuyên môn của tôi."
-
+        - Chỉ trả lời các câu hỏi về gym, PT, thể dục, sức khỏe
+        
+        Ví dụ: Nếu người dùng hỏi về 1 chủ đề bất kỳ không liên quan đến gym, PT, thể dục, sức khỏe, 
+        bạn hãy trả lời rằng: "Xin lỗi, tôi chỉ có thể hỗ trợ các câu hỏi liên quan đến gym, huấn luyện viên cá nhân, thể dục. Những lĩnh vực khác không nằm trong chuyên môn của tôi."
         
         Phong cách: Thân thiện, chuyên nghiệp, hiểu biết. Không sử dụng emoji.
         Luôn kết thúc bằng câu hỏi hoặc gợi ý hành động.
