@@ -1,27 +1,35 @@
 # app/services/pt_recommendation_service.py - PT recommendation and response formatting
 
-from datetime import datetime
 from app.utils.format_utils import format_distance_friendly
-from app.models.trainer_models import safe_get_trainer_data
 
 
 def create_trainer_response(trainers, user_input, is_nearby=False):
-    """Tạo phản hồi cho kết quả tìm kiếm Personal Trainer"""
+    """Tạo phản hồi cho kết quả tìm kiếm Personal Trainer (tối đa 10 PT, mixed gym và freelance)"""
     if not trainers:
         return "Không tìm thấy huấn luyện viên nào phù hợp với yêu cầu của bạn. Hãy thử mở rộng tiêu chí tìm kiếm!"
+
+    # Đếm số lượng PT theo loại
+    gym_count = sum(1 for t in trainers if t.get('ptType') == 'gym')
+    freelance_count = sum(1 for t in trainers if t.get('ptType') == 'freelance')
 
     if len(trainers) == 1:
         trainer = trainers[0]
         response = f"**{trainer['fullName']}**"
 
-        if trainer.get('gymName'):
+        # Hiển thị loại PT
+        if trainer.get('ptType') == 'freelance':
+            response += " 💼 (Huấn luyện viên tự do)"
+
+        if trainer.get('gymName') and trainer.get('ptType') == 'gym':
             response += f"\nPhòng gym: **{trainer['gymName']}**"
 
         if trainer.get('distance_km'):
             response += f" - {format_distance_friendly(trainer['distance_km'])}"
 
-        if trainer.get('gymAddress'):
+        if trainer.get('gymAddress') and trainer.get('ptType') == 'gym':
             response += f"\nĐịa chỉ gym: {trainer['gymAddress']}"
+        elif trainer.get('ptType') == 'freelance':
+            response += f"\n📍 Địa điểm: {trainer.get('gymAddress', 'Linh hoạt theo yêu cầu')}"
 
         if trainer.get('experience'):
             response += f"\nKinh nghiệm: {trainer['experience']} năm"
@@ -33,89 +41,59 @@ def create_trainer_response(trainers, user_input, is_nearby=False):
         if trainer.get('certificates') and len(trainer['certificates']) > 0:
             response += f"\nChứng chỉ: {len(trainer['certificates'])} chứng chỉ"
 
-        return response
-
-    elif len(trainers) <= 5:
-        response = f"**Tìm thấy {len(trainers)} huấn luyện viên phù hợp:**\n\n"
-
-        for i, trainer in enumerate(trainers, 1):
-            name = trainer['fullName']
-            gym_info = f" - {trainer['gymName']}" if trainer.get('gymName') else ""
-
-            distance_info = ""
-            if trainer.get('distance_km'):
-                distance_info = f" ({format_distance_friendly(trainer['distance_km'])})"
-
-            experience_info = ""
-            if trainer.get('experience'):
-                experience_info = f" - {trainer['experience']} năm kinh nghiệm"
-
-            goals_info = ""
-            if trainer.get('goalTrainings') and len(trainer['goalTrainings']) > 0:
-                goals_info = f"\n  Chuyên môn: {', '.join(trainer['goalTrainings'][:3])}"
-
-            response += f"{i}. **{name}**{gym_info}{distance_info}{experience_info}{goals_info}\n\n"
+        if trainer.get('bio'):
+            response += f"\nGiới thiệu: {trainer['bio']}"
 
         return response
 
     else:
-        # Group trainers by gym
-        trainers_by_gym = {}
-        for trainer in trainers:
-            gym_name = trainer.get('gymName', 'Gym không xác định')
-            if gym_name not in trainers_by_gym:
-                trainers_by_gym[gym_name] = {
-                    'trainers': [],
-                    'distance_km': trainer.get('distance_km'),
-                    'gymAddress': trainer.get('gymAddress'),
-                    'gymHotResearch': trainer.get('gymHotResearch', False)
-                }
-            trainers_by_gym[gym_name]['trainers'].append(trainer)
+        # Hiển thị tất cả PT (đã mixed sẵn từ query, tối đa 10)
+        response = f"**Tìm thấy {len(trainers)} huấn luyện viên**"
 
-        # Sort gyms by distance and hot status
-        sorted_gyms = sorted(
-            trainers_by_gym.items(),
-            key=lambda x: (
-                x[1]['distance_km'] if x[1]['distance_km'] is not None else float('inf'),
-                not x[1]['gymHotResearch']
-            )
-        )
+        if gym_count > 0 and freelance_count > 0:
+            response += f" *({gym_count} PT gym, {freelance_count} PT tự do)*"
 
-        response = f"**Tìm thấy {len(trainers)} huấn luyện viên tại {len(trainers_by_gym)} phòng gym:**\n\n"
+        response += ":\n\n"
 
-        for gym_name, gym_data in sorted_gyms[:10]:  # Hiển thị tối đa 10 gym
-            gym_trainers = gym_data['trainers']
-            distance_info = ""
-            if gym_data['distance_km']:
-                distance_info = f" - {format_distance_friendly(gym_data['distance_km'])}"
+        for i, trainer in enumerate(trainers, 1):
+            name = trainer['fullName']
 
-            hot_badge = " 🔥" if gym_data['gymHotResearch'] else ""
+            # Badge và thông tin gym/freelance
+            if trainer.get('ptType') == 'freelance':
+                type_badge = " - PT tự do"
+                location_info = ""
+                if trainer.get('distance_km'):
+                    location_info = f"Cách bạn {format_distance_friendly(trainer['distance_km'])}"
+            else:
+                type_badge = ""
+                gym_name = trainer.get('gymName', '')
+                location_info = f"\nLàm việc tại {gym_name}\n" if gym_name else ""
+                if trainer.get('distance_km'):
+                    location_info += f"Cách bạn {format_distance_friendly(trainer['distance_km'])}"
 
-            response += f"**{gym_name}**{distance_info}{hot_badge}\n"
+            experience_info = ""
+            if trainer.get('experience'):
+                experience_info = f"\nCó {trainer['experience']} năm kinh nghiệm"
 
-            # if gym_data['gymAddress']:
-            #     response += f"Địa chỉ: {gym_data['gymAddress']}\n"
+            response += f"{i}. **{name}**{type_badge}{location_info}{experience_info}\n"
 
-            response += f"Có {len(gym_trainers)} huấn luyện viên:\n"
+            # Chuyên môn (nếu có)
+            if trainer.get('goalTrainings') and len(trainer['goalTrainings']) > 0:
+                goals = ', '.join(trainer['goalTrainings'][:3])
+                response += f"Chuyên môn: {goals}\n"
 
-            for i, trainer in enumerate(gym_trainers[:3], 1):  # Hiển thị tối đa 3 PT/gym
-                exp_info = f" ({trainer['experience']} năm)" if trainer.get('experience') else ""
-                response += f"  {i}. {trainer['fullName']}{exp_info}\n"
+            response += "\n"
 
-            if len(gym_trainers) > 3:
-                response += f"  ... và {len(gym_trainers) - 3} huấn luyện viên khác\n"
-
-            # response += "\n"
-
-        if len(sorted_gyms) > 10:
-            response += f"\n_Còn {len(sorted_gyms) - 10} phòng gym khác với huấn luyện viên..._"
-
-        return response
+        return response.rstrip()
 
 
 def format_trainer_detailed_info(trainer):
     """Format chi tiết thông tin một PT"""
     response = f"**Thông tin huấn luyện viên: {trainer['fullName']}**\n\n"
+
+    # PT Type badge
+    if trainer.get('ptType') == 'freelance':
+        response += "**Huấn luyện viên tự do**\n\n"
 
     # Basic info
     if trainer.get('email'):
@@ -123,17 +101,21 @@ def format_trainer_detailed_info(trainer):
     if trainer.get('phoneNumber'):
         response += f"📱 Điện thoại: {trainer['phoneNumber']}\n"
 
-    # Gym info
-    if trainer.get('gymName'):
+    # Gym info for gym PTs
+    if trainer.get('ptType') == 'gym' and trainer.get('gymName'):
         response += f"\n🏢 Phòng gym: **{trainer['gymName']}**\n"
         if trainer.get('gymAddress'):
             response += f"📍 Địa chỉ: {trainer['gymAddress']}\n"
         if trainer.get('distance_km'):
             response += f"📏 Khoảng cách: {format_distance_friendly(trainer['distance_km'])}\n"
+    elif trainer.get('ptType') == 'freelance':
+        response += f"\n📍 Địa điểm tập: Linh hoạt theo yêu cầu\n"
+        if trainer.get('distance_km'):
+            response += f"📏 Khoảng cách: {format_distance_friendly(trainer['distance_km'])}\n"
 
     # Professional info
     if trainer.get('experience'):
-        response += f"\n💼 Kinh nghiệm: {trainer['experience']} năm\n"
+        response += f"\nKinh nghiệm: {trainer['experience']} năm\n"
 
     if trainer.get('certificates') and len(trainer['certificates']) > 0:
         response += f"🏆 Chứng chỉ: {len(trainer['certificates'])} chứng chỉ chuyên môn\n"
@@ -141,6 +123,9 @@ def format_trainer_detailed_info(trainer):
     if trainer.get('goalTrainings') and len(trainer['goalTrainings']) > 0:
         goals = ', '.join(trainer['goalTrainings'])
         response += f"🎯 Chuyên môn: {goals}\n"
+
+    if trainer.get('bio'):
+        response += f"\n📝 Giới thiệu: {trainer['bio']}\n"
 
     # Physical stats
     physical_info = []
@@ -153,4 +138,3 @@ def format_trainer_detailed_info(trainer):
         response += f"\n📊 Thể trạng: {', '.join(physical_info)}\n"
 
     return response
-

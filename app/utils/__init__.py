@@ -4,7 +4,6 @@ from .text_utils import (
     build_conversation_context,
     sanitize_text_for_json,
     normalize_vietnamese_text,
-    fuzzy_search_similarity,
     extract_search_keywords
 )
 
@@ -16,7 +15,6 @@ __all__ = [
     'build_conversation_context',
     'sanitize_text_for_json', 
     'normalize_vietnamese_text',
-    'fuzzy_search_similarity',
     'extract_search_keywords',
     'format_distance_friendly'
 ]

@@ -5,12 +5,12 @@ def format_distance_friendly(distance_km):
     if distance_km < 0.5:
         return f"{int(distance_km * 1000)}m"
     elif distance_km < 1:
-        return f"{distance_km:.1f}km (đi bộ được)" 
+        return f"{distance_km:.1f}km"
     elif distance_km < 3:
-        return f"{distance_km:.1f}km (gần)"
+        return f"{distance_km:.1f}km"
     elif distance_km < 5:
-        return f"{distance_km:.1f}km (xe đạp/xe máy)"
+        return f"{distance_km:.1f}km"
     elif distance_km < 10:
-        return f"{distance_km:.1f}km (ô tô/xe máy)"
+        return f"{distance_km:.1f}km"
     else:
-        return f"{distance_km:.1f}km (xa)"
+        return f"{distance_km:.1f}km"

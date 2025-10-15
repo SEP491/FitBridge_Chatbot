@@ -70,15 +70,6 @@ def normalize_vietnamese_text(text):
     
     return text
 
-def fuzzy_search_similarity(text1, text2):
-    """Tính toán độ tương đồng giữa hai chuỗi văn bản"""
-    if not text1 or not text2:
-        return 0
-    
-    normalized1 = normalize_vietnamese_text(text1)
-    normalized2 = normalize_vietnamese_text(text2)
-    
-    return SequenceMatcher(None, normalized1, normalized2).ratio()
 
 def extract_search_keywords(user_input):
     """Trích xuất từ khóa tìm kiếm từ đầu vào của người dùng"""

@@ -12,4 +12,5 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     promptResponse: str
     gyms: Optional[List[dict]] = None
+    trainers: Optional[List[dict]] = None
     conversation_history: Optional[List[dict]] = []

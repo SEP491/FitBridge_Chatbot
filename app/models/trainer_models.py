@@ -39,6 +39,7 @@ def safe_get_trainer_data(row):
             "isMale": get_bool_attr('ismale', True),
             "dob": format_date(get_attr('dob')),
             "avatarUrl": get_attr('avatarurl', ''),
+            "bio": get_attr('bio', ''),
             "accountStatus": get_attr('accountstatus', 'Active'),
             "createdAt": format_date(get_attr('createdat')),
             "updatedAt": format_date(get_attr('updatedat')),
@@ -54,6 +55,10 @@ def safe_get_trainer_data(row):
 
             # Goal Trainings
             "goalTrainings": get_attr('goal_trainings', []),
+
+            # PT Type (gym or freelance)
+            "ptType": get_attr('pt_type', 'gym'),
+            "isFreelance": get_bool_attr('is_freelance', False),
 
             # Gym Information
             "gymId": str(get_attr('gym_id', '')) if get_attr('gym_id') else None,
@@ -84,6 +89,7 @@ def safe_get_trainer_data(row):
             "isMale": True,
             "dob": None,
             "avatarUrl": "",
+            "bio": "",
             "accountStatus": "Active",
             "createdAt": None,
             "updatedAt": None,
@@ -95,11 +101,13 @@ def safe_get_trainer_data(row):
             "chest": None,
             "waist": None,
             "goalTrainings": [],
+            "ptType": "gym",
+            "isFreelance": False,
             "gymId": None,
             "gymName": "",
             "gymAddress": "",
             "gymLatitude": None,
             "gymLongitude": None,
-            "gymHotResearch": False
+            "gymHotResearch": False,
+            "distance_km": None
         }
-
